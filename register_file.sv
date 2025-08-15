@@ -1,7 +1,8 @@
 `default_nettype none
 
-module register_file #(
-    parameter CORE_ID = 0,
+module gpu_register_file #(
+    parameter THREAD_ID = 0,
+    parameter BLOCK_ID = 0,
     parameter DATA_WIDTH = 8,
     parameter NUM_REGISTERS = 4
 ) (
@@ -20,34 +21,65 @@ module register_file #(
     output wire [DATA_WIDTH-1:0] debug_reg0
 );
 
+    // Register definitions (GPU-style special registers)
+    localparam [1:0]
+        REG_R0 = 2'b00,        // General purpose
+        REG_R1 = 2'b01,        // General purpose  
+        REG_THREAD_IDX = 2'b10, // %threadIdx - current thread ID
+        REG_BLOCK_IDX = 2'b11;  // %blockIdx - current block ID + base address
+
     reg [DATA_WIDTH-1:0] registers [NUM_REGISTERS-1:0];
     
-    assign debug_reg0 = registers[0];
+    assign debug_reg0 = registers[REG_R0];
     
-    // Initialize R3 with core-specific base address
+    // Initialize special GPU registers
     initial begin
-        registers[0] = 0;
-        registers[1] = 0; 
-        registers[2] = 0;
-        registers[3] = (CORE_ID == 0) ? 0 : 2;  // Base address for each core
+        registers[REG_R0] = 8'h0;                    // R0 = 0 (general purpose)
+        registers[REG_R1] = 8'h0;                    // R1 = 0 (general purpose)
+        registers[REG_THREAD_IDX] = THREAD_ID;       // R2 = threadIdx
+        registers[REG_BLOCK_IDX] = THREAD_ID;        // R3 = base address for this thread
     end
     
-    // Read ports
+    // Read ports - special handling for GPU registers
     always_comb begin
-        read_data1 = registers[read_addr1];
-        read_data2 = registers[read_addr2];
+        case (read_addr1)
+            REG_R0: read_data1 = registers[REG_R0];
+            REG_R1: read_data1 = registers[REG_R1];
+            REG_THREAD_IDX: read_data1 = THREAD_ID;        // Always return current threadIdx
+            REG_BLOCK_IDX: read_data1 = registers[REG_BLOCK_IDX];
+            default: read_data1 = 8'h0;
+        endcase
+        
+        case (read_addr2)
+            REG_R0: read_data2 = registers[REG_R0];
+            REG_R1: read_data2 = registers[REG_R1];
+            REG_THREAD_IDX: read_data2 = THREAD_ID;        // Always return current threadIdx
+            REG_BLOCK_IDX: read_data2 = registers[REG_BLOCK_IDX];
+            default: read_data2 = 8'h0;
+        endcase
     end
     
-    // Write port
+    // Write port - protect special registers
     always @(posedge clk) begin
         if (reset) begin
-            registers[0] <= 0;
-            registers[1] <= 0;
-            registers[2] <= 0; 
-            registers[3] <= (CORE_ID == 0) ? 0 : 2;
-        end else if (write_en) begin
-            registers[write_addr] <= write_data;
+            registers[REG_R0] <= 8'h0;
+            registers[REG_R1] <= 8'h0;
+            registers[REG_THREAD_IDX] <= THREAD_ID;
+            registers[REG_BLOCK_IDX] <= THREAD_ID;
+        end 
+        else if (write_en) begin
+            case (write_addr)
+                REG_R0: registers[REG_R0] <= write_data;           // Writable
+                REG_R1: registers[REG_R1] <= write_data;           // Writable
+                REG_THREAD_IDX: begin
+                    // threadIdx is read-only, ignore writes
+                    // registers[REG_THREAD_IDX] <= THREAD_ID;
+                end
+                REG_BLOCK_IDX: registers[REG_BLOCK_IDX] <= write_data; // Can be used as base pointer
+            endcase
         end
     end
 
 endmodule
+
+`default_nettype wire
